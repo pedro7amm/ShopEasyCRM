@@ -2,8 +2,14 @@
 require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
+const cors = require('cors');
 
 const app = express();
+
+app.use(cors({
+  origin: 'http://localhost:5173'
+}));
+
 app.use(express.json());
 
 const pool = mysql.createPool({
@@ -155,6 +161,153 @@ app.post('/api/casos', async (req, res) => {
 });
 
 // Escuchar solamente en el equipo local para esta practica.
+
+// 7. Listar todos los pedidos del CRM.
+app.get('/api/pedidos', async (req, res) => {
+  try {
+    const [filas] = await pool.query(`
+      SELECT
+        o.idOrden AS idOrden,
+        o.Codigo_Referencia AS referencia,
+        o.Fecha_Orden AS fecha,
+        o.Total AS total,
+        o.Cliente_idCliente AS clienteId,
+        CONCAT_WS(' ', p.Nombre, p.Apellido1, p.Apellido2) AS cliente,
+        e.Descripcion_Estado_Orden AS estado
+      FROM Orden o
+      INNER JOIN Cliente c
+        ON c.idCliente = o.Cliente_idCliente
+      INNER JOIN Persona p
+        ON p.Cedula = c.Persona_Cedula
+      INNER JOIN Estado_Orden e
+        ON e.idEstado_Orden = o.Estado_Orden_idEstado_Orden
+      ORDER BY o.Fecha_Orden DESC
+    `);
+
+    res.json(filas);
+  } catch (error) {
+    errorServidor(res, error);
+  }
+});
+
+
+// 8. Actualizar el estado de un caso de soporte
+app.patch('/api/casos/:id/estado', async (req, res) => {
+  const id = Number(req.params.id);
+  const estadoId = Number(req.body?.estadoId);
+
+  if (
+    !Number.isInteger(id) || id <= 0 ||
+    !Number.isInteger(estadoId) || estadoId <= 0
+  ) {
+    return res.status(400).json({
+      error: 'El ID del caso y el estado deben ser validos.'
+    });
+  }
+
+  try {
+    // Verificar que el estado exista y este activo
+    const [estados] = await pool.execute(
+      `SELECT idCatalogo_EstadosSoporte
+       FROM Catalogo_EstadosSoporte
+       WHERE idCatalogo_EstadosSoporte = ?
+       AND Activo = 1`,
+      [estadoId]
+    );
+
+    if (estados.length === 0) {
+      return res.status(400).json({
+        error: 'El estado seleccionado no existe.'
+      });
+    }
+
+    // Actualizar el caso
+    const [resultado] = await pool.execute(
+      `UPDATE Caso_Soporte
+       SET Catalogo_EstadosSoporte_idCatalogo_EstadosSoporte = ?
+       WHERE idCaso_Soporte = ?`,
+      [estadoId, id]
+    );
+
+    if (resultado.affectedRows === 0) {
+      return res.status(404).json({
+        error: 'No se encontro el caso.'
+      });
+    }
+
+    res.json({
+      mensaje: 'Estado actualizado correctamente.'
+    });
+
+  } catch (error) {
+    errorServidor(res, error);
+  }
+});
+
+
+// 9. Actualizar el estado de un pedido
+app.patch('/api/pedidos/:id/estado', async (req, res) => {
+  const id = Number(req.params.id);
+  const estadoId = Number(req.body?.estadoId);
+
+  if (!Number.isInteger(id) || id <= 0 ||
+      !Number.isInteger(estadoId) || estadoId <= 0) {
+    return res.status(400).json({
+      error: 'El ID del pedido y el estado deben ser validos.'
+    });
+  }
+
+  try {
+    const [estados] = await pool.execute(
+      `SELECT idEstado_Orden
+       FROM Estado_Orden
+       WHERE idEstado_Orden = ? AND Activo = 1`,
+      [estadoId]
+    );
+
+    if (estados.length === 0) {
+      return res.status(400).json({
+        error: 'El estado seleccionado no existe o esta inactivo.'
+      });
+    }
+
+    const [resultado] = await pool.execute(
+      `UPDATE Orden
+       SET Estado_Orden_idEstado_Orden = ?
+       WHERE idOrden = ?`,
+      [estadoId, id]
+    );
+
+    if (resultado.affectedRows === 0) {
+      return res.status(404).json({
+        error: 'No se encontro el pedido.'
+      });
+    }
+
+    res.json({ mensaje: 'Estado del pedido actualizado correctamente.' });
+  } catch (error) {
+    errorServidor(res, error);
+  }
+});
+
+// 10. Consultar estados disponibles para pedidos
+app.get('/api/estados-pedido', async (req, res) => {
+  try {
+    const [filas] = await pool.query(`
+      SELECT
+        idEstado_Orden AS id,
+        Descripcion_Estado_Orden AS descripcion
+      FROM Estado_Orden
+      WHERE Activo = 1
+      ORDER BY idEstado_Orden
+    `);
+
+    res.json(filas);
+  } catch (error) {
+    errorServidor(res, error);
+  }
+});
+
 const port = Number(process.env.PORT || 3001);
 (async () => {
   try {
